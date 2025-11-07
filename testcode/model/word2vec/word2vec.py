@@ -1,8 +1,8 @@
 import random
 import re
-import torch
-import torch.nn as nn
-import torch.optim as optim
+import torch  # PyTorch 主库，用于张量运算和 GPU 支持
+import torch.nn as nn  # PyTorch 神经网络模块，提供常见层定义
+import torch.optim as optim  # PyTorch 优化器模块
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -54,16 +54,21 @@ class Word2Vec(nn.Module):
     # TODO: 1. Implement the Word2Vec model with two embedding layers
     def __init__(self, vocab_size, embedding_dim):
         super(Word2Vec, self).__init__()
+        # nn.Embedding 将索引映射为可训练的连续向量，构建中心词和上下文词两个嵌入矩阵
         self.center_embed = nn.Embedding(vocab_size, embedding_dim)
         self.outside_embed = nn.Embedding(vocab_size, embedding_dim)
+        # weight.data.uniform_ 直接对参数张量进行均匀分布初始化，避免初始梯度过大或过小
         self.center_embed.weight.data.uniform_(-0.5 / embedding_dim, 0.5 / embedding_dim)
         self.outside_embed.weight.data.uniform_(-0.5 / embedding_dim, 0.5 / embedding_dim)
     
     def forward(self, center_words, context_words, negative_samples):
+        # 嵌入层按索引返回词向量 (B, embedding_dim)
         v_c = self.center_embed(center_words)
         u_o = self.outside_embed(context_words)
         u_neg = self.outside_embed(negative_samples)
+        # torch.sum 对指定维度求和，这里得到每个正样本对的内积分数
         positive_scores = torch.sum(u_o * v_c, dim=1)
+        # torch.bmm 进行批量矩阵乘法，用于计算负样本分数
         negative_scores = torch.bmm(v_c.unsqueeze(1), u_neg.transpose(1, 2)).squeeze(1)
         return positive_scores, negative_scores
 
@@ -86,17 +91,18 @@ def train(model, training_data, optimizer, loss_fn, epochs, negative_sampler, k_
         random.shuffle(training_data)
         progress_bar = tqdm(training_data, desc=f"Epoch {epoch + 1}/{epochs}")
         for i, (center_word_idx, context_word_idx) in enumerate(progress_bar):
+            # torch.tensor 创建张量；long 类型用于索引嵌入层
             center_tensor = torch.tensor([center_word_idx], dtype=torch.long)
             context_tensor = torch.tensor([context_word_idx], dtype=torch.long)
             neg_sample_indices = negative_sampler.get_negative_samples(context_word_idx, k_negative_samples)
             neg_tensor = torch.tensor([neg_sample_indices], dtype=torch.long)
 
             # TODO: 4. Train the model using negative sampling
-            optimizer.zero_grad()
+            optimizer.zero_grad()  # AdamW 梯度清零，避免历史梯度累积
             positive_scores, negative_scores = model(center_tensor, context_tensor, neg_tensor)
             loss = loss_fn(positive_scores, negative_scores)
-            loss.backward()
-            optimizer.step()
+            loss.backward()  # 反向传播，自动计算梯度
+            optimizer.step()  # 根据梯度更新参数
             total_loss += loss.item()
             
             if i % 1000 == 0:
@@ -119,6 +125,7 @@ def visualize_embeddings(model, ix_to_word):
     plt.show()
 
 if __name__== "__main__":
+    # torch.cuda.is_available 检查 GPU 是否可用；torch.cuda.get_device_name 返回 GPU 名称
     print("PyTorch version:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
 
     corpus_path = "corpus.txt"
@@ -137,13 +144,23 @@ if __name__== "__main__":
     model = Word2Vec(vocab_size, EMBEDDING_DIM)
     # TODO: 2. Define the loss function
     def loss_fn(positive_scores, negative_scores):
+        # torch.sigmoid 将分数映射为概率；torch.log 计算交叉熵所需的对数概率
         positive_loss = -torch.log(torch.sigmoid(positive_scores) + 1e-8)
         negative_loss = -torch.sum(torch.log(torch.sigmoid(-negative_scores) + 1e-8), dim=1)
         return torch.mean(positive_loss + negative_loss)
+    # optim.AdamW 实现带权重衰减的 Adam 优化器
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     negative_sampler = NegativeSampler(word_counts, word_to_ix=word_to_ix)
 
     train(model, training_data, optimizer, loss_fn, EPOCHS, negative_sampler, K_NEGATIVE_SAMPLES)
     print("Training complete!")
 
-    visualize_embeddings(model, ix_to_word)
+    # 输出每个词的嵌入参数（保留两位小数）
+    embeddings = model.center_embed.weight.data.cpu().numpy()
+    for idx, vector in enumerate(embeddings):
+        word = ix_to_word.get(idx, f"<unk_{idx}>")
+        print(word)
+        print(["{:.2f}".format(x) for x in vector])
+
+    # print(model.center_embed.weight.data)
+    # visualize_embeddings(model, ix_to_word)
