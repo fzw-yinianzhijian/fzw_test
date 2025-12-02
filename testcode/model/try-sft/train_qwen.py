@@ -19,14 +19,24 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, Ta
 from transformers import BitsAndBytesConfig
 import torch
 
+# 多GPU训练时，设置每个进程使用的GPU
+if torch.cuda.is_available():
+    # 获取当前进程的local_rank（torchrun会自动设置）
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
+    print(f"进程 LOCAL_RANK={local_rank}, 使用设备: {device}")
+else:
+    device = torch.device("cpu")
+
 # ==================== 配置 ====================
 MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
-DATASET_PATH = "./data/train_1w.json"  # 本地数据集路径
+DATASET_PATH = "./data/train_1w_split.json"  # 本地数据集路径
 HF_TOKEN = os.getenv("HF_TOKEN", None)  # 从环境变量读取，或设置为 None
 
 # 多 GPU 配置
-# USE_MULTI_GPU = True  # 是否使用多 GPU 训练（设为 False 可关闭多 GPU 训练）
-USE_MULTI_GPU = False  # 是否使用多 GPU 训练（设为 False 可关闭多 GPU 训练）
+USE_MULTI_GPU = True  # 是否使用多 GPU 训练（设为 False 可关闭多 GPU 训练）
+# USE_MULTI_GPU = False  # 是否使用多 GPU 训练（设为 False 可关闭多 GPU 训练）
 NUM_GPUS = torch.cuda.device_count() if torch.cuda.is_available() else 1
 if USE_MULTI_GPU and NUM_GPUS > 1:
     print(f"多 GPU 训练已启用，检测到 {NUM_GPUS} 块 GPU")
@@ -48,12 +58,12 @@ LORA_DROPOUT = 0.1
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 # 训练配置
-BATCH_SIZE = 8 if USE_MULTI_GPU else 4  # 每卡批次大小，多GPU时可以更大
-GRADIENT_ACCUMULATION_STEPS = 2 if USE_MULTI_GPU else 4  # 梯度累积步数
+BATCH_SIZE = 2 # 每卡批次大小（多GPU时减少以避免OOM）
+GRADIENT_ACCUMULATION_STEPS = 8 # 梯度累积步数（增加以保持有效批次大小）
 LEARNING_RATE = 2e-4
 NUM_EPOCHS = 3
 MAX_LENGTH = 512
-USE_QLORA = False  # 不使用 QLoRA
+USE_QLORA = True  # 不使用 QLoRA（如果仍然OOM，可以设为True）
 USE_SAMPLE_DATA = False  # 是否只使用部分数据（用于快速测试）
 SAMPLE_SIZE = 10000  # 如果 USE_SAMPLE_DATA=True，使用的数据量
 
@@ -62,10 +72,22 @@ print("=" * 60)
 print("加载模型和 Tokenizer...")
 print("=" * 60)
 
+# 检查是否使用离线模式（优先使用本地缓存）
+# 如果网络有问题，可以设置为 True 强制使用本地缓存
+# USE_OFFLINE = os.getenv("HF_HUB_OFFLINE", "0") == "1" or os.getenv("FORCE_LOCAL_FILES", "0") == "1"
+USE_OFFLINE = True
+
+if USE_OFFLINE:
+    print("离线模式：仅使用本地缓存文件")
+
+
+
+
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,
     trust_remote_code=True,
-    token=HF_TOKEN
+    token=HF_TOKEN,
+    local_files_only=USE_OFFLINE  # 离线模式时只使用本地文件
 )
 
 # Qwen tokenizer 通常已有 pad_token，如果没有则设置
@@ -86,17 +108,34 @@ if USE_QLORA:
 
 # 加载模型
 print(f"加载模型: {MODEL_NAME}")
-# 多GPU时，device_map 由 Trainer 自动处理，这里设为 None
-# 单GPU时，使用 device_map="auto" 自动分配
-device_map = None if USE_MULTI_GPU else "auto"
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    quantization_config=quantization_config,
-    device_map=device_map,
-    torch_dtype=torch.bfloat16 if not USE_QLORA else None,
-    trust_remote_code=True,
-    token=HF_TOKEN
-)
+# 多GPU训练时，明确指定设备，避免所有进程都在GPU 0上加载
+if USE_MULTI_GPU:
+    # 多GPU时，不使用device_map，让模型加载到当前进程指定的GPU
+    # 然后由DDP自动分发到各个GPU
+    device_map = None
+    # 明确指定设备，确保模型加载到正确的GPU
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        quantization_config=quantization_config,
+        device_map=None,  # DDP模式下不使用device_map
+        torch_dtype=torch.bfloat16 if not USE_QLORA else None,
+        trust_remote_code=True,
+        token=HF_TOKEN,
+        local_files_only=USE_OFFLINE
+    )
+    # 手动将模型移动到当前进程的GPU
+    model = model.to(device)
+else:
+    # 单GPU时，使用device_map="auto"自动分配
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        quantization_config=quantization_config,
+        device_map="auto",
+        torch_dtype=torch.bfloat16 if not USE_QLORA else None,
+        trust_remote_code=True,
+        token=HF_TOKEN,
+        local_files_only=USE_OFFLINE
+    )
 
 # 准备 QLoRA 训练
 if USE_QLORA:
@@ -114,6 +153,10 @@ lora_config = LoraConfig(
 )
 
 model = get_peft_model(model, lora_config)
+
+# 确保模型处于训练模式
+model.train()
+
 print("\n可训练参数统计:")
 model.print_trainable_parameters()
 
