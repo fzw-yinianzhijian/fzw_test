@@ -1,31 +1,39 @@
-from transformers import AutoTokenizer
 
-checkpoint = "distilbert-base-uncased-finetuned-sst-2-english"
-tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+from transformers import pipeline, set_seed
+generator = pipeline('text-generation', model='gpt2')
+#set_seed(42)
+print(generator("Hello, I'm a language model,", max_length=30, num_return_sequences=5))
 
-text = "Oh, it is not my fault."
-# inputs = tokenizer(text, return_tensors="pt")
-inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
-print(inputs)
 
-from transformers import AutoModelForSequenceClassification
 
-checkpoint = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(checkpoint)
-outputs = model(**inputs)
-
-# from transformers import AutoModel
+# from transformers import AutoTokenizer
 
 # checkpoint = "distilbert-base-uncased-finetuned-sst-2-english"
-# model = AutoModel.from_pretrained(checkpoint)
+# tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
+# text = "Oh, it is not my fault."
+# # inputs = tokenizer(text, return_tensors="pt")
+# inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt")
+# print(inputs)
+
+# from transformers import AutoModelForSequenceClassification
+
+# checkpoint = "distilbert-base-uncased-finetuned-sst-2-english"
+# model = AutoModelForSequenceClassification.from_pretrained(checkpoint)
 # outputs = model(**inputs)
-# print(outputs.last_hidden_state.shape)
 
-# print(outputs.logits.shape)
-print(outputs.logits)
+# # from transformers import AutoModel
 
-import torch
+# # checkpoint = "distilbert-base-uncased-finetuned-sst-2-english"
+# # model = AutoModel.from_pretrained(checkpoint)
 
-predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-print(predictions)
+# # outputs = model(**inputs)
+# # print(outputs.last_hidden_state.shape)
+
+# # print(outputs.logits.shape)
+# print(outputs.logits)
+
+# import torch
+
+# predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+# print(predictions)
