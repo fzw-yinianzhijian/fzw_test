@@ -13,19 +13,17 @@ logger = logging.getLogger("PublicAPI")
 app = FastAPI(title="Public LLM Service")
 
 # 配置
-VLLM_API_URL = "http://localhost:8000/v1/chat/completions"
-API_KEY_SECRET = "your-public-secret-key"
+VLLM_API_URL = "http://localhost:8000/v1/completions"
+API_KEY_SECRET = "test_fzw_key"
 MAX_CONCURRENT_REQUESTS = 100 # 应用层队列限制
+
+# instruction one term
 
 # 信号量，用于应用层排队调度
 request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
 class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
+    prompt: str
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = 512
     stream: Optional[bool] = False
@@ -37,6 +35,7 @@ async def verify_api_key(request: Request, call_next):
     token = request.headers.get("Authorization")
     if request.url.path != "/docs" and request.url.path != "/openapi.json":
         if token != f"Bearer {API_KEY_SECRET}":
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
             # 这里为了演示简单，实际可根据需求开启或关闭鉴权
             pass 
     response = await call_next(request)
@@ -53,11 +52,10 @@ async def generate_response(request: ChatRequest):
         logger.info("Processing request...")
         
         payload = {
-            "model": "Qwen/Qwen1.5-7B-Chat", # 需要与 vLLM 启动的模型名一致
-            "messages": [m.dict() for m in request.messages],
+            "model": "gemma_test", # 需要与 vLLM 启动的模型名一致
+            "prompt": request.prompt,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
-            "stream": request.stream
         }
 
         # 2. 转发给 vLLM 后端
@@ -66,6 +64,7 @@ async def generate_response(request: ChatRequest):
             try:
                 # 能够处理流式 (Streaming) 或 非流式
                 if request.stream:
+                    assert False 
                     # 针对流式输出的特殊处理（需配合 StreamingResponse）
                     # 这里为了代码简洁，演示非流式
                     pass 
@@ -78,7 +77,7 @@ async def generate_response(request: ChatRequest):
                 # 3. 提取结果并返回标准格式
                 return {
                     "status": "success",
-                    "data": vllm_data['choices'][0]['message']['content'],
+                    "data": vllm_data['choices'][0]['text'],
                     "usage": vllm_data['usage']
                 }
 
