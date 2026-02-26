@@ -1,6 +1,7 @@
 import os
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
@@ -11,6 +12,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("PublicAPI")
 
 app = FastAPI(title="Public LLM Service")
+
+# CORS 配置，允许 OPTIONS 预检请求
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # 如仅本地调试，也可以改为 ["*"]，生产环境不建议
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,      # 或 ["*"]
+    allow_credentials=True,
+    allow_methods=["*"],        # 包含 OPTIONS
+    allow_headers=["*"],        # 包含 Authorization 等
+)
 
 # 配置
 VLLM_API_URL = "http://localhost:8000/v1/completions"
@@ -30,12 +46,17 @@ class ChatRequest(BaseModel):
 
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
+    # 预检请求直接放行，由 CORS 中间件处理
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # 简单的鉴权中间件
     # 实际生产中建议在 Nginx 层或使用专门的 Auth 服务
     token = request.headers.get("Authorization")
     if request.url.path != "/docs" and request.url.path != "/openapi.json":
         if token != f"Bearer {API_KEY_SECRET}":
-            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+            print(f" !!!!!SSSS Invalid or missing API key: {token}")
+            # raise HTTPException(status_code=401, detail="Invalid or missing API key")
             # 这里为了演示简单，实际可根据需求开启或关闭鉴权
             pass 
     response = await call_next(request)
